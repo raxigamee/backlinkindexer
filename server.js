@@ -9,11 +9,6 @@ app.use(express.json());
 // ===================== CONFIGURATION =====================
 const PORT = process.env.PORT || 3000;
 
-// WordPress connection details (set these as environment variables on Render)
-// WP_URL: e.g. "https://homecrop.in" (no trailing slash)
-// WP_USERNAME: the WordPress username tied to the Application Password
-// WP_APP_PASSWORD: the Application Password generated in WP Admin -> Users -> Profile
-// WP_PAGE_SLUG: the slug for the page this script maintains (default: "sitemap")
 const WP_URL = (process.env.WP_URL || "https://homecrop.in").replace(/\/$/, '');
 const WP_USERNAME = process.env.WP_USERNAME;
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
@@ -23,13 +18,7 @@ if (!WP_USERNAME || !WP_APP_PASSWORD) {
     console.warn("[!] WP_USERNAME or WP_APP_PASSWORD is not set. WordPress publishing will fail until these are configured.");
 }
 
-// Basic Auth header for WordPress Application Passwords
 const wpAuthHeader = 'Basic ' + Buffer.from(`${WP_USERNAME}:${WP_APP_PASSWORD}`).toString('base64');
-
-// Configure Google Auth.
-// On Render (or any host), set an env var GOOGLE_SERVICE_ACCOUNT_JSON containing
-// the full contents of your service-account.json file.
-// Locally, it will fall back to reading service-account.json from disk.
 const KEY_FILE = path.join(__dirname, 'service-account.json');
 
 let auth;
@@ -49,8 +38,8 @@ if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
 }
 
 /**
- * Finds an existing WordPress page by slug. Returns the page object or null.
- * FIXED: Removed the status filter argument to avoid "rest_forbidden_status" errors.
+ * Finds an existing WordPress page by slug. 
+ * FIXED: Returns the exact page object instead of the array wrapper.
  */
 async function findPageBySlug(slug) {
     const url = `${WP_URL}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}`;
@@ -64,6 +53,7 @@ async function findPageBySlug(slug) {
     }
 
     const results = await response.json();
+    // Return the first page object if it exists
     return Array.isArray(results) && results.length > 0 ? results[0] : null;
 }
 
@@ -100,7 +90,7 @@ async function createPage(slug, title, contentHtml) {
 async function updatePage(pageId, contentHtml) {
     const url = `${WP_URL}/wp-json/wp/v2/pages/${pageId}`;
     const response = await fetch(url, {
-        method: 'POST', // WordPress REST API uses POST for partial updates too
+        method: 'POST',
         headers: {
             'Authorization': wpAuthHeader,
             'Content-Type': 'application/json'
@@ -121,8 +111,6 @@ async function updatePage(pageId, contentHtml) {
 
 /**
  * Endpoint to receive backlinks and publish/update a WordPress page referencing them.
- * POST http://localhost:3000/api/index
- * Body: { "targetUrl": "https://medium.com" }
  */
 app.post('/api/index', async (req, res) => {
     const { targetUrl } = req.body;
@@ -139,8 +127,6 @@ app.post('/api/index', async (req, res) => {
         const timestamp = new Date().toISOString();
         const absoluteCoverageUrl = `${WP_URL}/${WP_PAGE_SLUG}`;
 
-        // 1. Build the LiveBlogPosting JSON-LD.
-        //    Using "liveBlogUpdate" arrays forces Googlebot to read this as breaking information.
         const contentHtml = `
 <script type="application/ld+json">
 {
@@ -200,6 +186,7 @@ app.post('/api/index', async (req, res) => {
         const existingPage = await findPageBySlug(WP_PAGE_SLUG);
         let wpPage;
         if (existingPage) {
+            // existingPage is now a single object, so existingPage.id is correct
             wpPage = await updatePage(existingPage.id, contentHtml);
             console.log(`[+] Updated existing LiveBlog page (id ${existingPage.id}) with target: ${targetUrl}`);
         } else {
@@ -207,7 +194,7 @@ app.post('/api/index', async (req, res) => {
             console.log(`[+] Created new LiveBlog page (id ${wpPage.id}) with target: ${targetUrl}`);
         }
 
-        const liveUrl = wpPage.link; // The actual public URL WordPress assigned
+        const liveUrl = wpPage.link;
 
         // 3. Authorize with Google APIs
         const authClient = await auth.getClient();
@@ -218,11 +205,10 @@ app.post('/api/index', async (req, res) => {
         const response = await indexing.urlNotifications.publish({
             requestBody: {
                 url: liveUrl,
-                type: 'URL_UPDATED' // Triggers immediate crawling prioritized over standard schedules
+                type: 'URL_UPDATED'
             }
         });
 
-        // 5. Return success to caller
         return res.status(200).json({
             success: true,
             message: "LiveBlog schema page published. Google Index API forced successfully.",
@@ -240,7 +226,6 @@ app.post('/api/index', async (req, res) => {
     }
 });
 
-// Start the Application Server
 app.listen(PORT, () => {
     console.log(`🚀 Indexer core online and listening on port ${PORT}`);
 });
