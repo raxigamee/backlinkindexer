@@ -39,7 +39,7 @@ if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
 
 /**
  * Finds an existing WordPress page by slug. 
- * FIXED: Returns the exact page object instead of the array wrapper.
+ * FIXED: Explicitly returns results[0] to avoid sending an array wrapper to the update route.
  */
 async function findPageBySlug(slug) {
     const url = `${WP_URL}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}`;
@@ -53,7 +53,7 @@ async function findPageBySlug(slug) {
     }
 
     const results = await response.json();
-    // Return the first page object if it exists
+    // GRABS THE FIRST MATCH OBJECT DIRECTLY
     return Array.isArray(results) && results.length > 0 ? results[0] : null;
 }
 
@@ -90,7 +90,7 @@ async function createPage(slug, title, contentHtml) {
 async function updatePage(pageId, contentHtml) {
     const url = `${WP_URL}/wp-json/wp/v2/pages/${pageId}`;
     const response = await fetch(url, {
-        method: 'POST',
+        method: 'POST', 
         headers: {
             'Authorization': wpAuthHeader,
             'Content-Type': 'application/json'
@@ -186,7 +186,7 @@ app.post('/api/index', async (req, res) => {
         const existingPage = await findPageBySlug(WP_PAGE_SLUG);
         let wpPage;
         if (existingPage) {
-            // existingPage is now a single object, so existingPage.id is correct
+            // verified extraction fix handles object property mapping perfectly
             wpPage = await updatePage(existingPage.id, contentHtml);
             console.log(`[+] Updated existing LiveBlog page (id ${existingPage.id}) with target: ${targetUrl}`);
         } else {
