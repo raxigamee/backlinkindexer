@@ -6,25 +6,21 @@ const path = require('path');
 const app = express();
 app.use(express.json());
 
-// CONFIGURATION PARAMETERS
+// ===================== CONFIGURATION =====================
 const PORT = process.env.PORT || 3000;
-const HUB_SITE_URL = "https://homecrop.in/"; // Replace with your verified GSC domain
-const SITEMAP_DIR = path.join(__dirname, 'public');
-const SITEMAP_PATH = path.join(SITEMAP_DIR, 'sitemap.html');
-const KEY_FILE = path.join(__dirname, 'service-account.json');
 
-// Ensure public directory exists
-if (!fs.existsSync(SITEMAP_DIR)) {
-    fs.mkdirSync(SITEMAP_DIR, { recursive: true });
+const WP_URL = (process.env.WP_URL || "https://homecrop.in").replace(/\/$/, '');
+const WP_USERNAME = process.env.WP_USERNAME;
+const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
+const WP_PAGE_SLUG = process.env.WP_PAGE_SLUG || "sitemap";
+
+if (!WP_USERNAME || !WP_APP_PASSWORD) {
+    console.warn("[!] WP_USERNAME or WP_APP_PASSWORD is not set. WordPress publishing will fail until these are configured.");
 }
 
-// Serve the public folder so Googlebot can download sitemap.html
-app.use(express.static(SITEMAP_DIR));
+const wpAuthHeader = 'Basic ' + Buffer.from(`${WP_USERNAME}:${WP_APP_PASSWORD}`).toString('base64');
+const KEY_FILE = path.join(__dirname, 'service-account.json');
 
-// Configure Google Auth.
-// On Render (or any host), set an env var GOOGLE_SERVICE_ACCOUNT_JSON containing
-// the full contents of your service-account.json file (as a single-line JSON string).
-// Locally, it will fall back to reading service-account.json from disk.
 let auth;
 if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     console.log("[i] Using Google credentials from GOOGLE_SERVICE_ACCOUNT_JSON environment variable.");
@@ -42,7 +38,77 @@ if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
 }
 
 /**
- * Endpoint to receive unowned backlinks
+ * Finds an existing WordPress page by slug. Returns the page object or null.
+ */
+async function findPageBySlug(slug) {
+    const url = `${WP_URL}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}&status=publish,draft`;
+    const response = await fetch(url, {
+        headers: { 'Authorization': wpAuthHeader }
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`WordPress lookup failed (${response.status}): ${text}`);
+    }
+
+    const results = await response.json();
+    return results.length > 0 ? results[0] : null;
+}
+
+/**
+ * Creates a new WordPress page with the given slug and HTML content.
+ */
+async function createPage(slug, title, contentHtml) {
+    const url = `${WP_URL}/wp-json/wp/v2/pages`;
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': wpAuthHeader,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            slug,
+            title,
+            content: contentHtml,
+            status: 'publish'
+        })
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`WordPress page creation failed (${response.status}): ${text}`);
+    }
+
+    return response.json();
+}
+
+/**
+ * Updates an existing WordPress page's content by its ID.
+ */
+async function updatePage(pageId, contentHtml) {
+    const url = `${WP_URL}/wp-json/wp/v2/pages/${pageId}`;
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': wpAuthHeader,
+            'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+            content: contentHtml,
+            status: 'publish'
+        })
+    });
+
+    if (!response.ok) {
+        const text = await response.text();
+        throw new Error(`WordPress page update failed (${response.status}): ${text}`);
+    }
+
+    return response.json();
+}
+
+/**
+ * Endpoint to receive backlinks and publish/update a WordPress page referencing them.
  * POST http://localhost:3000/api/index
  * Body: { "targetUrl": "https://medium.com" }
  */
@@ -53,71 +119,104 @@ app.post('/api/index', async (req, res) => {
         return res.status(400).json({ error: "A valid absolute targetUrl parameter is required." });
     }
 
+    if (!WP_USERNAME || !WP_APP_PASSWORD) {
+        return res.status(500).json({ error: "WordPress credentials are not configured on the server." });
+    }
+
     try {
         const timestamp = new Date().toISOString();
+        
+        // Dynamic construction of the Live URL based on settings
+        const absoluteCoverageUrl = `${WP_URL}/${WP_PAGE_SLUG}`;
 
-        // 1. Generate HTML featuring the prioritized LiveBlogPosting Schema
-        const dynamicHtml = `<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>Live Breaking Index Feed</title>
-    <script type="application/ld+json">
+        // 1. Build the LiveBlogPosting JSON-LD.
+        //    Using "liveBlogUpdate" arrays forces Googlebot to read this as breaking information.
+        const contentHtml = `
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "LiveBlogPosting",
+  "@id": "${absoluteCoverageUrl}#liveblog",
+  "headline": "Real-time Reference Index Coverage",
+  "description": "Live streaming updates and index reference signals.",
+  "datePublished": "${timestamp}",
+  "dateModified": "${timestamp}",
+  "coverageStartTime": "${timestamp}",
+  "coverageEndTime": "${new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()}",
+  "author": {
+    "@type": "Organization",
+    "name": "Index Manager"
+  },
+  "publisher": {
+    "@type": "Organization",
+    "name": "Homecrop",
+    "logo": {
+      "@type": "ImageObject",
+      "url": "${WP_URL}/favicon.ico"
+    }
+  },
+  "liveBlogUpdate": [
     {
-      "@context": "https://schema.org",
-      "@type": "LiveBlogPosting",
-      "headline": "Real-Time Infrastructure Routing Sync",
+      "@type": "BlogPosting",
+      "@id": "${absoluteCoverageUrl}#update-${Date.now()}",
+      "headline": "New Index Target Discovered",
       "datePublished": "${timestamp}",
       "dateModified": "${timestamp}",
-      "coverageStartTime": "${timestamp}",
-      "description": "Urgent crawling pipeline active.",
-      "liveBlogUpdate": [
-        {
-          "@type": "BlogPosting",
-          "headline": "Network Update Nodes",
-          "datePublished": "${timestamp}",
-          "articleBody": "System routing path verified.",
-          "sharedContent": {
-            "@type": "WebPage",
-            "url": "${targetUrl}"
-          }
-        }
-      ]
+      "articleBody": "New live signal processing deployed for target destination.",
+      "mainEntityOfPage": "${absoluteCoverageUrl}",
+      "sharedContent": {
+        "@type": "WebPage",
+        "url": "${targetUrl}"
+      }
     }
-    </script>
-</head>
-<body>
-    <h1>🔴 Priority Event Stream Node</h1>
-    <p>Data payload distribution active.</p>
-    <ul>
-        <li><a href="${targetUrl}" rel="dofollow">Target Index Route</a></li>
-    </ul>
-</body>
-</html>`;
+  ]
+}
+</script>
 
-        // Write the code instantly to the public file directory
-        fs.writeFileSync(SITEMAP_PATH, dynamicHtml, 'utf8');
-        console.log(`[+] HTML updated with target: ${targetUrl}`);
+<h2>Live Coverage Index</h2>
+<p>⚡ <strong>Status:</strong> Live Monitoring Active</p>
+<p>Last Sync Engine Iteration: <code>${timestamp}</code></p>
 
-        // 2. Authorize with Google APIs
+<hr />
+
+<div class="live-update-entry">
+  <h3>Update Broadcast [${new Date().toLocaleTimeString()}]</h3>
+  <p>Target reference point successfully updated to index configuration cluster:</p>
+  <p>➡️ <a href="${targetUrl}" rel="noopener" target="_blank"><strong>${targetUrl}</strong></a></p>
+</div>
+`;
+
+        // 2. Find or create the WordPress page
+        const existingPage = await findPageBySlug(WP_PAGE_SLUG);
+        let wpPage;
+        if (existingPage) {
+            wpPage = await updatePage(existingPage.id, contentHtml);
+            console.log(`[+] Updated existing LiveBlog page (id ${existingPage.id}) with target: ${targetUrl}`);
+        } else {
+            wpPage = await createPage(WP_PAGE_SLUG, "Live Coverage Index", contentHtml);
+            console.log(`[+] Created new LiveBlog page (id ${wpPage.id}) with target: ${targetUrl}`);
+        }
+
+        const liveUrl = wpPage.link;
+
+        // 3. Authorize with Google APIs
         const authClient = await auth.getClient();
 
-        // 3. Fire the Indexing API Emergency Ping targeting your Hub file
+        // 4. Notify the Google Indexing API about the live WordPress page
         const indexing = google.indexing({ version: 'v3', auth: authClient });
-        const targetHubUrl = `${HUB_SITE_URL.replace(/\/$/, '')}/sitemap.html`;
 
         const response = await indexing.urlNotifications.publish({
             requestBody: {
-                url: targetHubUrl,
-                type: 'URL_UPDATED' // Forces Googlebot to prioritize your domain immediately
+                url: liveUrl,
+                type: 'URL_UPDATED' // Triggers immediate crawling prioritized over standard standard schedules
             }
         });
 
-        // 4. Return success to user/client application
+        // 5. Return success to caller
         return res.status(200).json({
             success: true,
-            message: "Googlebot priority crawl triggered successfully.",
-            hubUrlChecked: targetHubUrl,
+            message: "LiveBlog schema page published. Google Index API forced successfully.",
+            wordpressUrl: liveUrl,
             injectedTarget: targetUrl,
             googleApiResponse: response.data
         });
