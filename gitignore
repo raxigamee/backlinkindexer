@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# Environment variables and secrets
+.env
+service-account.json
+
+# Generated output
+public/sitemap.html
+
+# Logs
+npm-debug.log*
+*.log
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor folders
+.vscode/
+.idea/
