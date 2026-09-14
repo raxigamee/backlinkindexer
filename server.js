@@ -2,6 +2,7 @@ const express = require('express');
 const { google } = require('googleapis');
 const fs = require('fs');
 const path = require('path');
+
 const app = express();
 app.use(express.json());
 
@@ -18,13 +19,27 @@ if (!fs.existsSync(SITEMAP_DIR)) {
 }
 
 // Serve the public folder so Googlebot can download sitemap.html
-app.use(express.static('public'));
+app.use(express.static(SITEMAP_DIR));
 
-// Configure Google Auth using the service account key file
-const auth = new google.auth.GoogleAuth({
-    keyFile: KEY_FILE,
-    scopes: ['https://www.googleapis.com/auth/indexing']
-});
+// Configure Google Auth.
+// On Render (or any host), set an env var GOOGLE_SERVICE_ACCOUNT_JSON containing
+// the full contents of your service-account.json file (as a single-line JSON string).
+// Locally, it will fall back to reading service-account.json from disk.
+let auth;
+if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
+    console.log("[i] Using Google credentials from GOOGLE_SERVICE_ACCOUNT_JSON environment variable.");
+    const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    auth = new google.auth.GoogleAuth({
+        credentials,
+        scopes: ['https://www.googleapis.com/auth/indexing']
+    });
+} else {
+    console.log("[i] GOOGLE_SERVICE_ACCOUNT_JSON not set — falling back to local service-account.json file.");
+    auth = new google.auth.GoogleAuth({
+        keyFile: KEY_FILE,
+        scopes: ['https://www.googleapis.com/auth/indexing']
+    });
+}
 
 /**
  * Endpoint to receive unowned backlinks
@@ -89,7 +104,7 @@ app.post('/api/index', async (req, res) => {
 
         // 3. Fire the Indexing API Emergency Ping targeting your Hub file
         const indexing = google.indexing({ version: 'v3', auth: authClient });
-        const targetHubUrl = `${HUB_SITE_URL}/sitemap.html`;
+        const targetHubUrl = `${HUB_SITE_URL.replace(/\/$/, '')}/sitemap.html`;
 
         const response = await indexing.urlNotifications.publish({
             requestBody: {
