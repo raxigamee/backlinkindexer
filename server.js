@@ -9,6 +9,11 @@ app.use(express.json());
 // ===================== CONFIGURATION =====================
 const PORT = process.env.PORT || 3000;
 
+// WordPress connection details (set these as environment variables on Render)
+// WP_URL: e.g. "https://homecrop.in" (no trailing slash)
+// WP_USERNAME: the WordPress username tied to the Application Password
+// WP_APP_PASSWORD: the Application Password generated in WP Admin -> Users -> Profile
+// WP_PAGE_SLUG: the slug for the page this script maintains (default: "sitemap")
 const WP_URL = (process.env.WP_URL || "https://homecrop.in").replace(/\/$/, '');
 const WP_USERNAME = process.env.WP_USERNAME;
 const WP_APP_PASSWORD = process.env.WP_APP_PASSWORD;
@@ -18,7 +23,13 @@ if (!WP_USERNAME || !WP_APP_PASSWORD) {
     console.warn("[!] WP_USERNAME or WP_APP_PASSWORD is not set. WordPress publishing will fail until these are configured.");
 }
 
+// Basic Auth header for WordPress Application Passwords
 const wpAuthHeader = 'Basic ' + Buffer.from(`${WP_USERNAME}:${WP_APP_PASSWORD}`).toString('base64');
+
+// Configure Google Auth.
+// On Render (or any host), set an env var GOOGLE_SERVICE_ACCOUNT_JSON containing
+// the full contents of your service-account.json file.
+// Locally, it will fall back to reading service-account.json from disk.
 const KEY_FILE = path.join(__dirname, 'service-account.json');
 
 let auth;
@@ -27,21 +38,22 @@ if (process.env.GOOGLE_SERVICE_ACCOUNT_JSON) {
     const credentials = JSON.parse(process.env.GOOGLE_SERVICE_ACCOUNT_JSON);
     auth = new google.auth.GoogleAuth({
         credentials,
-        scopes: ['https://www.googleapis.com/auth/indexing']
+        scopes: ['https://googleapis.com']
     });
 } else {
     console.log("[i] GOOGLE_SERVICE_ACCOUNT_JSON not set — falling back to local service-account.json file.");
     auth = new google.auth.GoogleAuth({
         keyFile: KEY_FILE,
-        scopes: ['https://www.googleapis.com/auth/indexing']
+        scopes: ['https://googleapis.com']
     });
 }
 
 /**
  * Finds an existing WordPress page by slug. Returns the page object or null.
+ * FIXED: Removed the status filter argument to avoid "rest_forbidden_status" errors.
  */
 async function findPageBySlug(slug) {
-    const url = `${WP_URL}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}&status=publish,draft`;
+    const url = `${WP_URL}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}`;
     const response = await fetch(url, {
         headers: { 'Authorization': wpAuthHeader }
     });
@@ -52,7 +64,7 @@ async function findPageBySlug(slug) {
     }
 
     const results = await response.json();
-    return results.length > 0 ? results[0] : null;
+    return Array.isArray(results) && results.length > 0 ? results[0] : null;
 }
 
 /**
@@ -88,7 +100,7 @@ async function createPage(slug, title, contentHtml) {
 async function updatePage(pageId, contentHtml) {
     const url = `${WP_URL}/wp-json/wp/v2/pages/${pageId}`;
     const response = await fetch(url, {
-        method: 'POST',
+        method: 'POST', // WordPress REST API uses POST for partial updates too
         headers: {
             'Authorization': wpAuthHeader,
             'Content-Type': 'application/json'
@@ -125,8 +137,6 @@ app.post('/api/index', async (req, res) => {
 
     try {
         const timestamp = new Date().toISOString();
-        
-        // Dynamic construction of the Live URL based on settings
         const absoluteCoverageUrl = `${WP_URL}/${WP_PAGE_SLUG}`;
 
         // 1. Build the LiveBlogPosting JSON-LD.
@@ -197,7 +207,7 @@ app.post('/api/index', async (req, res) => {
             console.log(`[+] Created new LiveBlog page (id ${wpPage.id}) with target: ${targetUrl}`);
         }
 
-        const liveUrl = wpPage.link;
+        const liveUrl = wpPage.link; // The actual public URL WordPress assigned
 
         // 3. Authorize with Google APIs
         const authClient = await auth.getClient();
@@ -208,7 +218,7 @@ app.post('/api/index', async (req, res) => {
         const response = await indexing.urlNotifications.publish({
             requestBody: {
                 url: liveUrl,
-                type: 'URL_UPDATED' // Triggers immediate crawling prioritized over standard standard schedules
+                type: 'URL_UPDATED' // Triggers immediate crawling prioritized over standard schedules
             }
         });
 
