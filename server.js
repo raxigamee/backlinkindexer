@@ -274,5 +274,3 @@ app.post('/api/index', async (req, res) => {
 app.listen(PORT, () => {
     console.log(`🚀 Indexer core online and listening on port ${PORT}`);
 });
-
-fix this code as you told 
