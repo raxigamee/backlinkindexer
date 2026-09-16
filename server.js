@@ -124,20 +124,34 @@ app.get('/api/debug-wp', async (req, res) => {
 });
 app.get('/api/wp-test', async (req, res) => {
     try {
+        const credentials = `${WP_USERNAME}:${WP_APP_PASSWORD}`;
+        const encoded = Buffer.from(credentials).toString('base64');
+
+        console.log("Username:", WP_USERNAME);
+        console.log("Password length:", WP_APP_PASSWORD.length);
+        console.log("Auth starts with:", `Basic ${encoded.substring(0, 10)}...`);
+
         const response = await fetch(
             `${WP_URL}/wp-json/wp/v2/users/me?context=edit`,
             {
+                method: 'GET',
                 headers: {
-                    'Authorization': wpAuthHeader
+                    'Authorization': `Basic ${encoded}`,
+                    'Accept': 'application/json'
                 }
             }
         );
 
-        const data = await response.json();
+        const text = await response.text();
 
-        return res.status(response.status).json(data);
+        console.log("WordPress status:", response.status);
+        console.log("WordPress response:", text);
+
+        return res.status(response.status).send(text);
 
     } catch (error) {
+        console.error(error);
+
         return res.status(500).json({
             error: error.message
         });
