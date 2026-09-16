@@ -112,6 +112,16 @@ async function updatePage(pageId, contentHtml) {
 /**
  * Endpoint to receive backlinks and publish/update a WordPress page referencing them.
  */
+app.get('/api/debug-wp', async (req, res) => {
+    return res.json({
+        WP_URL: WP_URL,
+        usernameSet: !!WP_USERNAME,
+        username: WP_USERNAME || null,
+        passwordSet: !!WP_APP_PASSWORD,
+        passwordLength: WP_APP_PASSWORD ? WP_APP_PASSWORD.length : 0,
+        authHeaderCreated: !!wpAuthHeader
+    });
+});
 app.get('/api/wp-test', async (req, res) => {
     try {
         const response = await fetch(
