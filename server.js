@@ -67,8 +67,7 @@ try {
         auth = new google.auth.GoogleAuth({
             credentials: credentials,
 
-            // IMPORTANT:
-            // Correct scope for Google Indexing API
+            // Correct Google Indexing API scope
             scopes: [
                 'https://www.googleapis.com/auth/indexing'
             ]
@@ -93,8 +92,7 @@ try {
         auth = new google.auth.GoogleAuth({
             keyFile: KEY_FILE,
 
-            // IMPORTANT:
-            // Correct scope for Google Indexing API
+            // Correct Google Indexing API scope
             scopes: [
                 'https://www.googleapis.com/auth/indexing'
             ]
@@ -119,7 +117,7 @@ try {
 async function findPageBySlug(slug) {
 
     const url =
-        `${WP_URL}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}`;
+        `${WP_URL}/wp-json/wp/v2/pages?slug=${encodeURIComponent(slug)}&context=edit`;
 
     const response = await fetch(url, {
         method: 'GET',
@@ -141,7 +139,24 @@ async function findPageBySlug(slug) {
     const results = await response.json();
 
     if (Array.isArray(results) && results.length > 0) {
-        return results[0];
+
+        const page = results[0];
+
+        console.log(
+            `[+] Found WordPress page ID: ${page.id}`
+        );
+
+        console.log(
+            `[+] Found WordPress page URL: ${page.link}`
+        );
+
+        console.log(
+            `[+] Existing content length: ${
+                page.content?.raw?.length || 0
+            }`
+        );
+
+        return page;
     }
 
     return null;
@@ -171,7 +186,8 @@ async function createPage(slug, title, contentHtml) {
             slug: slug,
             title: title,
             content: contentHtml,
-            status: 'publish'
+            status: 'publish',
+            template: ''
         })
     });
 
@@ -209,20 +225,98 @@ async function updatePage(pageId, contentHtml) {
 
         body: JSON.stringify({
             content: contentHtml,
-            status: 'publish'
+            status: 'publish',
+
+            // Use normal WordPress page template
+            template: ''
         })
     });
 
-    if (!response.ok) {
+    const text = await response.text();
 
-        const text = await response.text();
+    if (!response.ok) {
 
         throw new Error(
             `WordPress page update failed (${response.status}): ${text}`
         );
     }
 
-    return await response.json();
+    const data = JSON.parse(text);
+
+    console.log(
+        '[+] WordPress page updated successfully.'
+    );
+
+    console.log(
+        `[+] Page ID: ${data.id}`
+    );
+
+    console.log(
+        `[+] Page URL: ${data.link}`
+    );
+
+    console.log(
+        `[+] Saved content length: ${
+            data.content?.raw?.length || 0
+        }`
+    );
+
+    if (!data.content || !data.content.raw) {
+
+        console.warn(
+            '[!] WordPress did not return content.raw.'
+        );
+    }
+
+
+    // =================================================
+    // VERIFY SAVED CONTENT
+    // =================================================
+
+    const verifyResponse = await fetch(
+        `${WP_URL}/wp-json/wp/v2/pages/${pageId}?context=edit`,
+        {
+            method: 'GET',
+            headers: {
+                'Authorization': wpAuthHeader,
+                'Accept': 'application/json'
+            }
+        }
+    );
+
+    const verifyText =
+        await verifyResponse.text();
+
+    if (!verifyResponse.ok) {
+
+        throw new Error(
+            `WordPress content verification failed (${verifyResponse.status}): ${verifyText}`
+        );
+    }
+
+    const verifiedPage =
+        JSON.parse(verifyText);
+
+    const savedContent =
+        verifiedPage.content?.raw || '';
+
+    console.log(
+        `[+] Verified saved content length: ${savedContent.length}`
+    );
+
+
+    if (!savedContent.includes('Live Coverage Index')) {
+
+        throw new Error(
+            'WordPress accepted the update but the expected page content was not found during verification.'
+        );
+    }
+
+    console.log(
+        '[+] WordPress content verification successful.'
+    );
+
+    return verifiedPage;
 }
 
 
@@ -242,11 +336,13 @@ app.get('/api/debug-wp', async (req, res) => {
 
         passwordSet: !!WP_APP_PASSWORD,
 
-        passwordLength: WP_APP_PASSWORD
-            ? WP_APP_PASSWORD.length
-            : 0,
+        passwordLength:
+            WP_APP_PASSWORD
+                ? WP_APP_PASSWORD.length
+                : 0,
 
-        authHeaderCreated: !!wpAuthHeader
+        authHeaderCreated:
+            !!wpAuthHeader
     });
 });
 
@@ -262,7 +358,9 @@ app.get('/api/wp-test', async (req, res) => {
         if (!WP_USERNAME || !WP_APP_PASSWORD) {
 
             return res.status(500).json({
-                error: 'WordPress credentials are not configured.'
+
+                error:
+                    'WordPress credentials are not configured.'
             });
         }
 
@@ -282,19 +380,24 @@ app.get('/api/wp-test', async (req, res) => {
             WP_APP_PASSWORD.length
         );
 
-        const response = await fetch(
-            `${WP_URL}/wp-json/wp/v2/users/me?context=edit`,
-            {
-                method: 'GET',
+        const response =
+            await fetch(
+                `${WP_URL}/wp-json/wp/v2/users/me?context=edit`,
+                {
+                    method: 'GET',
 
-                headers: {
-                    'Authorization': `Basic ${encoded}`,
-                    'Accept': 'application/json'
+                    headers: {
+                        'Authorization':
+                            `Basic ${encoded}`,
+
+                        'Accept':
+                            'application/json'
+                    }
                 }
-            }
-        );
+            );
 
-        const text = await response.text();
+        const text =
+            await response.text();
 
         console.log(
             '[i] WordPress status:',
@@ -318,7 +421,9 @@ app.get('/api/wp-test', async (req, res) => {
         );
 
         return res.status(500).json({
-            error: error.message
+
+            error:
+                error.message
         });
     }
 });
@@ -342,7 +447,10 @@ app.get('/api/google-test', async (req, res) => {
         const tokenResponse =
             await authClient.getAccessToken();
 
-        if (!tokenResponse || !tokenResponse.token) {
+        if (
+            !tokenResponse ||
+            !tokenResponse.token
+        ) {
 
             throw new Error(
                 'Google authentication did not return an access token.'
@@ -360,7 +468,8 @@ app.get('/api/google-test', async (req, res) => {
             message:
                 'Google service-account authentication is working.',
 
-            accessTokenReceived: true
+            accessTokenReceived:
+                true
         });
 
     } catch (error) {
@@ -390,17 +499,20 @@ app.get('/api/google-test', async (req, res) => {
 
 app.post('/api/index', async (req, res) => {
 
-    const { targetUrl } = req.body;
+    const { targetUrl } =
+        req.body;
 
 
-    // -------------------------------------------------
-    // Validate target URL
-    // -------------------------------------------------
+    // =================================================
+    // VALIDATE TARGET URL
+    // =================================================
 
     if (
         !targetUrl ||
-        !targetUrl.startsWith('http://') &&
-        !targetUrl.startsWith('https://')
+        (
+            !targetUrl.startsWith('http://') &&
+            !targetUrl.startsWith('https://')
+        )
     ) {
 
         return res.status(400).json({
@@ -411,11 +523,14 @@ app.post('/api/index', async (req, res) => {
     }
 
 
-    // -------------------------------------------------
-    // Check WordPress credentials
-    // -------------------------------------------------
+    // =================================================
+    // CHECK WORDPRESS CREDENTIALS
+    // =================================================
 
-    if (!WP_USERNAME || !WP_APP_PASSWORD) {
+    if (
+        !WP_USERNAME ||
+        !WP_APP_PASSWORD
+    ) {
 
         return res.status(500).json({
 
@@ -428,7 +543,7 @@ app.post('/api/index', async (req, res) => {
     try {
 
         // =================================================
-        // 1. CREATE CONTENT
+        // 1. CREATE PAGE CONTENT
         // =================================================
 
         const timestamp =
@@ -438,89 +553,64 @@ app.post('/api/index', async (req, res) => {
             Date.now();
 
         const absoluteCoverageUrl =
-            `${WP_URL}/${WP_PAGE_SLUG}`;
+            `${WP_URL}/${WP_PAGE_SLUG}/`;
 
 
         const contentHtml = `
+<div class="live-coverage-index">
+
+    <h1>Live Coverage Index</h1>
+
+    <p>
+        <strong>Status:</strong>
+        Live Monitoring Active
+    </p>
+
+    <p>
+        Last Sync Engine Iteration:
+        <code>${timestamp}</code>
+    </p>
+
+    <hr>
+
+    <div class="live-update-entry">
+
+        <h2>New Index Target Discovered</h2>
+
+        <p>
+            Target reference point successfully updated:
+        </p>
+
+        <p>
+            <a
+                href="${targetUrl}"
+                rel="noopener noreferrer"
+                target="_blank"
+            >
+                <strong>${targetUrl}</strong>
+            </a>
+        </p>
+
+        <p>
+            Update Broadcast:
+            ${new Date().toLocaleTimeString()}
+        </p>
+
+    </div>
+
+</div>
+
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
-  "@type": "LiveBlogPosting",
-  "@id": "${absoluteCoverageUrl}#liveblog",
-  "headline": "Real-time Reference Index Coverage",
-  "description": "Live streaming updates and index reference signals.",
-  "datePublished": "${timestamp}",
-  "dateModified": "${timestamp}",
-  "coverageStartTime": "${timestamp}",
-  "coverageEndTime": "${new Date(
-      Date.now() + 24 * 60 * 60 * 1000
-  ).toISOString()}",
-  "author": {
-    "@type": "Organization",
-    "name": "Index Manager"
-  },
-  "publisher": {
-    "@type": "Organization",
-    "name": "Homecrop",
-    "logo": {
-      "@type": "ImageObject",
-      "url": "${WP_URL}/favicon.ico"
-    }
-  },
-  "liveBlogUpdate": [
-    {
-      "@type": "BlogPosting",
-      "@id": "${absoluteCoverageUrl}#update-${updateId}",
-      "headline": "New Index Target Discovered",
-      "datePublished": "${timestamp}",
-      "dateModified": "${timestamp}",
-      "articleBody": "New live signal processing deployed for target destination.",
-      "mainEntityOfPage": "${absoluteCoverageUrl}",
-      "sharedContent": {
-        "@type": "WebPage",
-        "url": "${targetUrl}"
-      }
-    }
-  ]
+  "@type": "WebPage",
+  "@id": "${absoluteCoverageUrl}#webpage",
+  "url": "${absoluteCoverageUrl}",
+  "name": "Live Coverage Index",
+  "description": "Live reference coverage page.",
+  "dateModified": "${timestamp}"
 }
 </script>
-
-<h2>Live Coverage Index</h2>
-
-<p>
-⚡ <strong>Status:</strong>
-Live Monitoring Active
-</p>
-
-<p>
-Last Sync Engine Iteration:
-<code>${timestamp}</code>
-</p>
-
-<hr />
-
-<div class="live-update-entry">
-
-<h3>
-Update Broadcast [${new Date().toLocaleTimeString()}]
-</h3>
-
-<p>
-Target reference point successfully updated to index configuration cluster:
-</p>
-
-<p>
-➡️
-<a
-    href="${targetUrl}"
-    rel="noopener"
-    target="_blank"
->
-<strong>${targetUrl}</strong>
-</a>
-</p>
-
-</div>
 `;
 
 
@@ -534,7 +624,9 @@ Target reference point successfully updated to index configuration cluster:
         );
 
         const existingPage =
-            await findPageBySlug(WP_PAGE_SLUG);
+            await findPageBySlug(
+                WP_PAGE_SLUG
+            );
 
         let wpPage;
 
@@ -590,9 +682,6 @@ Target reference point successfully updated to index configuration cluster:
             await auth.getClient();
 
 
-        // Get access token explicitly so authentication
-        // errors are caught before calling Indexing API.
-
         const tokenResponse =
             await authClient.getAccessToken();
 
@@ -618,8 +707,13 @@ Target reference point successfully updated to index configuration cluster:
         // =================================================
 
         console.log(
-            '[i] Sending URL to Google Indexing API:',
+            '[i] Sending WordPress page URL to Google Indexing API:',
             liveUrl
+        );
+
+        console.log(
+            '[i] Target URL included in page content:',
+            targetUrl
         );
 
 
@@ -633,15 +727,19 @@ Target reference point successfully updated to index configuration cluster:
 
 
         const response =
-            await indexing.urlNotifications.publish({
+            await indexing
+                .urlNotifications
+                .publish({
 
-                requestBody: {
+                    requestBody: {
 
-                    url: liveUrl,
+                        url:
+                            liveUrl,
 
-                    type: 'URL_UPDATED'
-                }
-            });
+                        type:
+                            'URL_UPDATED'
+                    }
+                });
 
 
         console.log(
@@ -656,7 +754,8 @@ Target reference point successfully updated to index configuration cluster:
 
         return res.status(200).json({
 
-            success: true,
+            success:
+                true,
 
             message:
                 'WordPress page published and Google Indexing API request completed.',
@@ -668,7 +767,16 @@ Target reference point successfully updated to index configuration cluster:
                 targetUrl,
 
             googleApiResponse:
-                response.data
+                response.data,
+
+            savedContentLength:
+                wpPage.content?.raw?.length || 0,
+
+            contentVerified:
+                true,
+
+            submittedToGoogle:
+                liveUrl
         });
 
 
@@ -693,9 +801,11 @@ Target reference point successfully updated to index configuration cluster:
 
             googleAuthentication:
                 error.message &&
-                error.message.toLowerCase().includes('authentication')
-                ? 'FAILED'
-                : 'UNKNOWN'
+                error.message
+                    .toLowerCase()
+                    .includes('authentication')
+                    ? 'FAILED'
+                    : 'UNKNOWN'
         });
     }
 });
